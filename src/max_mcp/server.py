@@ -4,10 +4,11 @@ from .client import lifespan
 from .tools import channels, chats, messages, send
 
 INSTRUCTIONS = (
-    "MAX messenger user-session tools. Use list_chats/get_chat to discover chats. "
-    "read_messages/list_channel_posts to fetch history. search_messages does "
-    "client-side scan (slow). dump_channel for full archive (cap 1000 posts per "
-    "call). send_message/send_file for writes."
+    "Инструменты пользовательской сессии MAX. Сначала находите чат через "
+    "list_chats/get_chat. Историю читайте через read_messages или "
+    "list_channel_posts. search_messages выполняет локальный проход и может "
+    "работать медленно. dump_channel выгружает канал частями до 1000 публикаций. "
+    "Перед send_message/send_file обязательно проверьте chat_id и содержимое."
 )
 
 mcp = FastMCP("max-mcp", instructions=INSTRUCTIONS, lifespan=lifespan)
