@@ -137,12 +137,7 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[AppCtx]:
         await _wait_until_ready(task, ready)
         yield AppCtx(client=client)
     finally:
-        try:
-            await client.stop()
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            pass
+        await asyncio.gather(client.stop(), return_exceptions=True)
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
