@@ -39,18 +39,18 @@ def _write_secret(path: pathlib.Path, data: str) -> None:
     tmp_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(str(tmp_path), flags, 0o600)
+    published = False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(tmp_path, path)
+        published = True
         path.chmod(0o600)
-    except BaseException:
-        try:
+    finally:
+        if not published:
             tmp_path.unlink(missing_ok=True)
-        finally:
-            raise
 
 
 def _harden_session_file() -> None:
@@ -137,7 +137,11 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("login-qr", help="Войти по QR-коду через мобильное приложение MAX")
     sms = sub.add_parser("login-sms", help="Войти по номеру телефона и SMS-коду")
-    sms.add_argument("--phone", required=True, help="Номер в формате E.164, например +79991234567")
+    sms.add_argument(
+        "--phone",
+        required=True,
+        help="Номер в формате E.164, например +79991234567",
+    )
     sub.add_parser("login", help="Устаревший псевдоним login-qr")
     args = parser.parse_args()
 
