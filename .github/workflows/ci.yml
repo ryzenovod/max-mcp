@@ -12,6 +12,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
 
@@ -25,6 +26,23 @@ jobs:
       - name: Install project
         run: uv sync --frozen
       - name: Lint
-        run: uv run --with ruff ruff check src tests
+        id: lint
+        shell: bash
+        run: |
+          set +e
+          uv run --with ruff ruff check src tests > ruff-report.txt 2>&1
+          status=$?
+          cat ruff-report.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload Ruff report
+        if: steps.lint.outputs.status != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-report-${{ matrix.python-version }}
+          path: ruff-report.txt
+      - name: Fail on lint errors
+        if: steps.lint.outputs.status != '0'
+        run: exit 1
       - name: Test
         run: uv run --with pytest pytest -q
