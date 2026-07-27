@@ -31,10 +31,7 @@ def _check_session_dir() -> None:
     if st.st_uid != os.getuid():
         raise RuntimeError(f"{SESSION_DIR} is not owned by current user")
     if st.st_mode & 0o077:
-        raise RuntimeError(
-            f"{SESSION_DIR} permissions too open ({oct(st.st_mode & 0o777)}); "
-            "tighten to 0700"
-        )
+        SESSION_DIR.chmod(0o700)
 
 
 def _check_session_file(path: pathlib.Path) -> None:
@@ -46,10 +43,7 @@ def _check_session_file(path: pathlib.Path) -> None:
     if st.st_uid != os.getuid():
         raise RuntimeError(f"{path} is not owned by current user")
     if st.st_mode & 0o077:
-        raise RuntimeError(
-            f"{path} permissions too open ({oct(st.st_mode & 0o777)}); "
-            "tighten to 0600"
-        )
+        path.chmod(0o600)
 
 
 def _read_secret(path: pathlib.Path) -> str | None:
@@ -145,7 +139,9 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[AppCtx]:
     finally:
         try:
             await client.stop()
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
+            pass
+        except Exception:
             pass
         if not task.done():
             task.cancel()
