@@ -5,6 +5,7 @@ from mcp.server.session import ServerSession
 
 from ..client import AppCtx
 from ..normalize import message_to_dict
+from ._common import item_time, next_before_time, positive_int
 
 
 def register(mcp: FastMCP) -> None:
@@ -15,15 +16,17 @@ def register(mcp: FastMCP) -> None:
         limit: int = 50,
         before_time: int | None = None,
     ) -> dict[str, Any]:
-        """Read message history of a chat. Paginate backward via `before_time` (unix int)."""
+        """Прочитать историю чата; before_time листает историю назад."""
+        limit = positive_int("limit", limit, maximum=100)
         client = ctx.request_context.lifespan_context.client
         page = await client.fetch_history(
-            chat_id=chat_id, backward=limit, from_time=before_time
-        )
-        page = page or []
-        messages = [message_to_dict(m) for m in page]
-        next_before_time = messages[-1]["time"] - 1 if len(messages) >= limit else None
-        return {"messages": messages, "next_before_time": next_before_time}
+            chat_id=chat_id,
+            backward=limit,
+            from_time=before_time,
+        ) or []
+        messages = [message_to_dict(message) for message in page]
+        cursor = next_before_time(messages, page_is_full=len(page) >= limit)
+        return {"messages": messages, "next_before_time": cursor}
 
     @mcp.tool()
     async def search_messages(
@@ -33,40 +36,51 @@ def register(mcp: FastMCP) -> None:
         limit: int = 50,
         scan_limit: int = 500,
     ) -> dict[str, Any]:
-        """Client-side search: scan up to `scan_limit` messages in `chat_id`, filter by `query`.
+        """Искать подстроку локальным проходом по истории указанного чата."""
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query must be a non-empty string")
+        limit = positive_int("limit", limit, maximum=100)
+        scan_limit = positive_int("scan_limit", scan_limit, maximum=10_000)
 
-        MAX has no native server-side message search. Walks history backward
-        in batches of 100 and filters text case-insensitively. Slow on large chats.
-        """
         client = ctx.request_context.lifespan_context.client
-        q = query.casefold()
+        needle = query.casefold()
         hits: list[dict[str, Any]] = []
         before_time: int | None = None
         scanned = 0
-        batch = 100
+        history_exhausted = False
+
         while scanned < scan_limit and len(hits) < limit:
+            batch_size = min(100, scan_limit - scanned)
             page = await client.fetch_history(
-                chat_id=chat_id, backward=batch, from_time=before_time
-            )
-            page = page or []
+                chat_id=chat_id,
+                backward=batch_size,
+                from_time=before_time,
+            ) or []
             if not page:
+                history_exhausted = True
                 break
-            for m in page:
+
+            for message in page:
+                if scanned >= scan_limit or len(hits) >= limit:
+                    break
                 scanned += 1
-                d = message_to_dict(m)
-                text = (d.get("text") or "").casefold()
-                if q in text:
-                    hits.append(d)
-                    if len(hits) >= limit:
-                        break
-            if len(page) < batch:
+                normalized = message_to_dict(message)
+                text = (normalized.get("text") or "").casefold()
+                if needle in text:
+                    hits.append(normalized)
+
+            if len(page) < batch_size:
+                history_exhausted = True
                 break
-            last_time = page[-1].time if hasattr(page[-1], "time") else message_to_dict(page[-1]).get("time")
+
+            last_time = item_time(page[-1])
             if last_time is None:
                 break
             before_time = last_time - 1
+
         return {
             "messages": hits,
             "scanned": scanned,
-            "scan_exhausted": scanned >= scan_limit,
+            "scan_exhausted": scanned >= scan_limit and not history_exhausted,
+            "history_exhausted": history_exhausted,
         }
