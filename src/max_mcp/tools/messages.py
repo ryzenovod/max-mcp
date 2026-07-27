@@ -81,6 +81,8 @@ def register(mcp: FastMCP) -> None:
         return {
             "messages": hits,
             "scanned": scanned,
-            "scan_exhausted": scanned >= scan_limit and not history_exhausted,
+            "scan_exhausted": (
+                scanned >= scan_limit and len(hits) < limit and not history_exhausted
+            ),
             "history_exhausted": history_exhausted,
         }
