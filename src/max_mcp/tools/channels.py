@@ -5,6 +5,7 @@ from mcp.server.session import ServerSession
 
 from ..client import AppCtx
 from ..normalize import post_to_dict
+from ._common import item_time, next_before_time, positive_int
 
 
 def register(mcp: FastMCP) -> None:
@@ -15,15 +16,17 @@ def register(mcp: FastMCP) -> None:
         limit: int = 50,
         before_time: int | None = None,
     ) -> dict[str, Any]:
-        """List recent posts of a MAX channel (backward pagination via `before_time`, unix int)."""
+        """Получить публикации канала; before_time листает историю назад."""
+        limit = positive_int("limit", limit, maximum=100)
         client = ctx.request_context.lifespan_context.client
         page = await client.fetch_history(
-            chat_id=channel_id, backward=limit, from_time=before_time
-        )
-        page = page or []
-        posts = [post_to_dict(m) for m in page]
-        next_before_time = posts[-1]["time"] - 1 if len(posts) >= limit else None
-        return {"posts": posts, "next_before_time": next_before_time}
+            chat_id=channel_id,
+            backward=limit,
+            from_time=before_time,
+        ) or []
+        posts = [post_to_dict(message) for message in page]
+        cursor = next_before_time(posts, page_is_full=len(page) >= limit)
+        return {"posts": posts, "next_before_time": cursor}
 
     @mcp.tool()
     async def dump_channel(
@@ -31,45 +34,60 @@ def register(mcp: FastMCP) -> None:
         channel_id: int,
         since_time: int | None = None,
         max_posts: int = 1000,
+        before_time: int | None = None,
     ) -> dict[str, Any]:
-        """Dump channel posts backward until `max_posts` or `since_time` reached.
-
-        Hard cap 1000 posts per call to fit MCP output limits. For full archives,
-        call repeatedly with shrinking `before_time` (use the smallest `time` from
-        previous batch).
-        """
+        """Выгрузить до 1000 публикаций канала с поддержкой продолжения выгрузки."""
+        max_posts = positive_int("max_posts", max_posts, maximum=1000)
         client = ctx.request_context.lifespan_context.client
-        max_posts = min(max_posts, 1000)
         posts: list[dict[str, Any]] = []
-        before_time: int | None = None
+        cursor = before_time
         stopped = "exhausted"
-        batch = 100
+
         while len(posts) < max_posts:
+            batch_size = min(100, max_posts - len(posts))
             page = await client.fetch_history(
-                chat_id=channel_id, backward=batch, from_time=before_time
-            )
-            page = page or []
+                chat_id=channel_id,
+                backward=batch_size,
+                from_time=cursor,
+            ) or []
             if not page:
                 break
-            stop = False
-            for m in page:
-                d = post_to_dict(m)
-                t = d.get("time")
-                if since_time is not None and t is not None and t < since_time:
-                    stop = True
+
+            reached_since_time = False
+            for message in page:
+                normalized = post_to_dict(message)
+                timestamp = item_time(normalized)
+                if (
+                    since_time is not None
+                    and timestamp is not None
+                    and timestamp < since_time
+                ):
+                    reached_since_time = True
                     stopped = "since_time"
                     break
-                posts.append(d)
+                posts.append(normalized)
                 if len(posts) >= max_posts:
-                    stop = True
                     stopped = "max_posts"
                     break
-            if stop:
+
+            if reached_since_time or len(posts) >= max_posts:
                 break
-            if len(page) < batch:
+            if len(page) < batch_size:
                 break
-            last_time = page[-1].time if hasattr(page[-1], "time") else post_to_dict(page[-1]).get("time")
+
+            last_time = item_time(page[-1])
             if last_time is None:
+                stopped = "invalid_cursor"
                 break
-            before_time = last_time - 1
-        return {"posts": posts, "count": len(posts), "stopped_reason": stopped}
+            cursor = last_time - 1
+
+        next_cursor = next_before_time(
+            posts,
+            page_is_full=stopped == "max_posts" and bool(posts),
+        )
+        return {
+            "posts": posts,
+            "count": len(posts),
+            "stopped_reason": stopped,
+            "next_before_time": next_cursor,
+        }

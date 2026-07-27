@@ -1,67 +1,105 @@
+from enum import Enum
 from typing import Any
 
 
-def _dump(obj: Any) -> Any:
+def _dump(obj: Any) -> dict[str, Any]:
     if obj is None:
-        return None
+        return {}
+    if isinstance(obj, dict):
+        return obj
     dump = getattr(obj, "model_dump", None)
     if callable(dump):
-        return dump(mode="json", exclude_none=True)
-    return obj
+        dumped = dump(mode="json", exclude_none=True)
+        return dumped if isinstance(dumped, dict) else {}
+    try:
+        return vars(obj)
+    except TypeError:
+        return {}
+
+
+def _value(d: dict[str, Any], key: str, obj: Any, attr: str | None = None) -> Any:
+    value = d.get(key)
+    if value is not None:
+        return value
+    return getattr(obj, attr or key, None)
+
+
+def _enum_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, Enum):
+        value = value.value
+    text = str(value)
+    return text.rsplit(".", 1)[-1]
+
+
+def _entity_id(value: Any) -> Any:
+    if isinstance(value, dict):
+        return value.get("id")
+    return getattr(value, "id", value)
 
 
 def chat_to_dict(chat: Any) -> dict[str, Any]:
-    d = _dump(chat) or {}
-    chat_type = d.get("type") or getattr(chat, "type", None)
+    d = _dump(chat)
+    owner = d.get("owner_id")
+    if owner is None:
+        owner = _value(d, "owner", chat)
     return {
-        "id": d.get("id") or getattr(chat, "id", None),
-        "title": d.get("title") or getattr(chat, "title", None),
-        "type": str(chat_type) if chat_type is not None else None,
-        "last_event_time": d.get("last_event_time"),
-        "participants_count": d.get("participants_count"),
-        "description": d.get("description"),
-        "owner_id": d.get("owner"),
+        "id": _value(d, "id", chat),
+        "title": _value(d, "title", chat),
+        "type": _enum_text(_value(d, "type", chat)),
+        "last_event_time": _value(d, "last_event_time", chat),
+        "participants_count": _value(d, "participants_count", chat),
+        "description": _value(d, "description", chat),
+        "owner_id": _entity_id(owner),
     }
 
 
 def attach_to_dict(att: Any) -> dict[str, Any]:
-    d = _dump(att) or {}
-    kind = type(att).__name__
-    d["_kind"] = kind
-    return d
+    d = _dump(att)
+    if not isinstance(d, dict):
+        return {"value": d, "_kind": type(att).__name__}
+    out = dict(d)
+    out.setdefault("_kind", type(att).__name__)
+    return out
 
 
 def _reply_to_id(msg: Any, d: dict[str, Any]) -> int | None:
-    msg_type = d.get("type") or getattr(msg, "type", None)
-    if str(msg_type).upper() == "REPLY":
-        return d.get("prev_message_id") or getattr(msg, "prev_message_id", None)
+    msg_type = _enum_text(_value(d, "type", msg))
+    if msg_type == "REPLY":
+        return _value(d, "prev_message_id", msg)
     return None
 
 
 def message_to_dict(msg: Any) -> dict[str, Any]:
-    d = _dump(msg) or {}
+    d = _dump(msg)
     out = {
-        "id": d.get("id"),
-        "chat_id": d.get("chat_id"),
-        "sender": d.get("sender"),
-        "text": d.get("text"),
-        "time": d.get("time"),
-        "type": str(d.get("type")) if d.get("type") is not None else None,
+        "id": _value(d, "id", msg),
+        "chat_id": _value(d, "chat_id", msg),
+        "sender": _entity_id(_value(d, "sender", msg)),
+        "text": _value(d, "text", msg),
+        "time": _value(d, "time", msg),
+        "type": _enum_text(_value(d, "type", msg)),
         "reply_to_id": _reply_to_id(msg, d),
     }
-    attaches = d.get("attaches") or getattr(msg, "attaches", None) or []
+    attaches = _value(d, "attaches", msg) or []
     if attaches:
         out["attaches"] = [
-            attach_to_dict(a) if not isinstance(a, dict) else a for a in attaches
+            attach_to_dict(attachment)
+            if not isinstance(attachment, dict)
+            else dict(attachment)
+            for attachment in attaches
         ]
     return out
 
 
 def post_to_dict(msg: Any) -> dict[str, Any]:
     base = message_to_dict(msg)
-    d = _dump(msg) or {}
-    if d.get("reaction_info") is not None:
-        base["reaction_info"] = d["reaction_info"]
-    if d.get("stats") is not None:
-        base["stats"] = d["stats"]
+    d = _dump(msg)
+    reaction_info = _value(d, "reaction_info", msg)
+    stats = _value(d, "stats", msg)
+    if reaction_info is not None:
+        base["reaction_info"] = reaction_info
+    if stats is not None:
+        base["stats"] = stats
     return base
