@@ -27,6 +27,17 @@ def test_session_file_allows_synthetic_uid_with_explicit_flag(
     client._check_session_file(session_path)
 
 
+def test_session_dir_allows_synthetic_uid_with_explicit_flag(
+    tmp_path, monkeypatch
+) -> None:
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(client, "SESSION_DIR", tmp_path)
+    monkeypatch.setattr(client.os, "getuid", lambda: tmp_path.stat().st_uid + 1)
+    monkeypatch.setenv(client.ALLOW_SYNTHETIC_UID_ENV, "1")
+
+    client._check_session_dir()
+
+
 def test_synthetic_uid_flag_keeps_symlink_rejection(tmp_path, monkeypatch) -> None:
     session_path = tmp_path / client.SESSION_FILE
     target_path = tmp_path / "target.db"
